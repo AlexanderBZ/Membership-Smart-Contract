@@ -1,109 +1,74 @@
-// SPDX-License-Identifier: MIT
-// compiler version must be greater than or equal to 0.8.13 and less than 0.9.0
-pragma solidity ^0.8.7;
+//SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
 
-import "github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/utils/math/SafeMath.sol";
-import "github.com/OpenZeppelin/openzeppelin-contracts/contracts/token/ERC1155/ERC1155.sol";
-import "github.com/OpenZeppelin/openzeppelin-contracts/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/Counters.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/math/SafeMath.sol";
+import "@openzeppelin/contracts/token/ERC721/extensions/ERC721Enumerable.sol";
 
-contract DFlix is ERC1155, Ownable {
-
+contract Membership is ERC721Enumerable, Ownable {
     using SafeMath for uint256;
+    using Counters for Counters.Counter;
 
-    struct plan {
-        string name;
-        string uri;
-        uint256 subscribers;
-        uint256 price;
-        uint time;
+    Counters.Counter private _tokenIds;
+
+    bool public active = true;
+    uint public max_supply;
+    uint public price;
+    uint public constant max_per_mint = 5;
+    uint public membershipStartTime;
+    uint public membershipEndTime;
+
+
+    constructor (string memory _name, string memory _symbol, uint _max_supply, uint _price) ERC721(_name, _symbol) {
+        max_supply = _max_supply;
+        // a price of 5 is equal to 0.05
+        price = _price * (10 ** 16);
+        // set NFT to expire after one year
+        membershipStartTime = block.timestamp;
+        membershipEndTime = block.timestamp + 365 days;
     }
 
-    struct subscriber {
-        uint256 plan;
-        uint256 date;
-    }
+    function mintNFTs(uint _count) public payable {
+        uint totalMinted = _tokenIds.current();
 
-    mapping(uint256 => plan) internal plans;
+        require(totalMinted.add(_count) <= max_supply, "Not enough NFTs left!");
+        require(_count > 0 && _count <= max_per_mint, "Cannot mint specified number of NFTs.");
+        require(msg.value >= price.mul(_count), "Not enough ether to purchase NFTs.");
 
-    mapping(address => subscriber) internal subscribers;
-
-    uint256 public totalPlans;
-
-    constructor(string memory name, string memory symbol, string memory uri) ERC1155(uri) {}
-
-
-    modifier correctId(uint id) {
-        require(id <= totalPlans && id>0, "provide a correct planID");
-        _;
-    }
-
-    function setURI(string memory uri) external onlyOwner {
-        _setURI(uri);
-    }
-
-
-
-    function ifExpired(uint id) internal view returns(bool) {
-        if(subscribers[msg.sender].plan == id) {
-            if((block.timestamp).sub(subscribers[msg.sender].date) < plans[id].time) {
-                return false;
-            } else {
-                return true;
-            }
-        } else {
-            return true;
+        for (uint i = 0; i < _count; i++) {
+            _mintSingleNFT();
         }
     }
 
-    function addPlan(string memory _name, string memory uri, uint256 price, uint time) external onlyOwner {
-        totalPlans = totalPlans.add(1);
-        uint256 id = totalPlans.add(1);
-        plans[id] = plan(_name, uri, 0, price, time);
+    function _mintSingleNFT() private {
+        uint newTokenID = _tokenIds.current();
+        _safeMint(msg.sender, newTokenID);
+        _tokenIds.increment();
     }
 
-    function updatePlan(uint id, string memory _name, string memory uri, uint256 price, uint time) external onlyOwner {
-        plans[id] = plan(_name, uri, plans[id].subscribers, price, time);
+    function tokensOfOwner(address _owner) external view returns (uint[] memory) {
+        uint tokenCount = balanceOf(_owner);
+        uint[] memory tokensId = new uint256[](tokenCount);
+
+        for (uint i = 0; i < tokenCount; i++) {
+            tokensId[i] = tokenOfOwnerByIndex(_owner, i);
+        }
+
+        return tokensId;
     }
 
-    function subscribe(uint256 planId) external correctId(planId) payable {
-        require(ifExpired(planId) == true, "your current plan hasn't expired yet");
-        require(msg.value == plans[planId].price, "please send correct amount of ether");
-        plans[planId].subscribers = (plans[planId].subscribers).add(1);
-        subscribers[msg.sender] = subscriber(planId, block.timestamp);
-        _burn(msg.sender, subscribers[msg.sender].plan, balanceOf(msg.sender, subscribers[msg.sender].plan));
-        plans[subscribers[msg.sender].plan].subscribers = (plans[subscribers[msg.sender].plan].subscribers).sub(balanceOf(msg.sender, subscribers[msg.sender].plan));
-        _mint(msg.sender, planId, 1, "");
-        payable(msg.sender).transfer(msg.value);
+    function checkExpiration() public payable {
+        if (block.timestamp >= membershipEndTime) {
+            active = false;
+        }
     }
 
-    function currentPlan(address user) public view returns(uint) {
-        require((block.timestamp).sub(subscribers[msg.sender].date) < plans[subscribers[msg.sender].plan].time, "deosn't have any active plan");
-        return subscribers[user].plan;
-    }
+    function withdraw() public payable onlyOwner {
+        uint balance = address(this).balance;
+        require(balance > 0, "No ether left to withdraw");
 
-    function tokenURI(uint id) public correctId(id) view returns(string memory) {
-        return plans[id].uri;
-    }
-
-    function tokenSupply(uint id) public correctId(id) view returns(uint) {
-        return plans[id].subscribers;
-    }
-
-    function tokenPrice(uint id) public correctId(id) view returns(uint) {
-        return plans[id].price;
-    }
-
-
-    function totalSupply() public view returns(uint) {
-        return totalPlans;
-    }
-
-    function balance() public view onlyOwner returns (uint) {
-        return address(this).balance;
-    }
-
-    function withdraw(uint256 amount) external onlyOwner {
-        (bool success, ) = payable(owner()).call{value: amount}("");
-        require(success, "transfer failed");
+        (bool success, ) = (msg.sender).call{value: balance}("");
+        require(success, "Transfer failed.");
     }
 }
